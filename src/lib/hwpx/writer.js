@@ -3,7 +3,7 @@
 // 원칙: 바뀌지 않은 문단/구역은 원본 XML 을 그대로 내보낸다. 바뀐 문단은 run 을 다시 만들고
 // 줄 배치 정보(linesegarray)는 넣지 않아 한글이 다시 계산하게 한다. 원본 XML 트리는 바꾸지 않는다.
 
-import { utf8Encode } from '../bytes.js';
+import { utf8Encode, utf8Decode } from '../bytes.js';
 import { writeZip } from '../zip.js';
 import { XElement, parseXml, serializeXml } from '../xml.js';
 import { sniffImage, pt2hu, mimeForExt } from '../model.js';
@@ -35,13 +35,15 @@ const nextId = () => { idSeed = (idSeed + 1) & 0x7fffffff; return idSeed; };
 // ---------------------------------------------------------------------------
 // header.xml
 
-function buildHeader(doc, ctx) {
+function buildHeader(doc, ctx, sectionCount) {
   const b = doc.backing;
   const newCs = doc.charShapes.filter((s) => s.isNew).sort((a, c) => a.id - c.id);
   const newPs = doc.paraShapes.filter((s) => s.isNew).sort((a, c) => a.id - c.id);
   const newBf = doc.borderFills.filter((s) => s.isNew).sort((a, c) => a.id - c.id);
-  if (!newCs.length && !newPs.length && !newBf.length) return null;
+  const secChanged = sectionCount !== b.sections.length;
+  if (!newCs.length && !newPs.length && !newBf.length && !secChanged) return null;
   const root = b.header.root.clone();
+  if (secChanged || root.has('secCnt')) root.set('secCnt', sectionCount);
   const refList = root.find('refList') || root;
   const hh = prefixOf(refList) || 'hh:';
   const hcEl = refList.find('fillBrush') || refList.find('pt') || refList.find('intent') || refList.find('left');
@@ -535,7 +537,7 @@ export async function writeHwpx(doc, model) {
     const root = shallow(src.root, [...paras, ...others.filter((c) => c.type !== 'text')]);
     sectionOut.push({ name, data: utf8Encode(serializeXml({ prolog: src.prolog, root, epilog: src.epilog })) });
   }
-  const headerXml = buildHeader(doc, ctx);
+  const headerXml = buildHeader(doc, ctx, model.sections.length);
 
   // content.hpf: 새 그림/구역 항목
   let hpfData = null;
@@ -551,8 +553,15 @@ export async function writeHwpx(doc, model) {
         const id = `section${i}`;
         const have = manifest.childrenNamed('item').find((x) => x.get('id') === id);
         if (i < model.sections.length && !have) {
-          manifest.children.push(mk(`${pre}item`, [['id', id], ['href', `Contents/${id}.xml`], ['media-type', 'application/xml']], []));
-          if (spine) spine.children.push(mk(`${prefixOf(spine) || 'opf:'}itemref`, [['idref', id], ['linear', 'yes']], []));
+          // 앞 구역 항목 바로 뒤에 끼운다.
+          const item = mk(`${pre}item`, [['id', id], ['href', `Contents/${id}.xml`], ['media-type', 'application/xml']], []);
+          const prev = manifest.children.findIndex((x) => x.type === 'el' && x.get('id') === `section${i - 1}`);
+          manifest.children.splice(prev >= 0 ? prev + 1 : manifest.children.length, 0, item);
+          if (spine) {
+            const ref = mk(`${prefixOf(spine) || 'opf:'}itemref`, [['idref', id]], []);
+            const sp = spine.children.findIndex((x) => x.type === 'el' && x.get('idref') === `section${i - 1}`);
+            spine.children.splice(sp >= 0 ? sp + 1 : spine.children.length, 0, ref);
+          }
         } else if (i >= model.sections.length && have) {
           manifest.children = manifest.children.filter((x) => x !== have);
           if (spine) spine.children = spine.children.filter((x) => !(x.type === 'el' && x.get('idref') === id));
@@ -560,6 +569,41 @@ export async function writeHwpx(doc, model) {
       }
     }
     hpfData = utf8Encode(serializeXml({ prolog: b.hpf.prolog, root, epilog: b.hpf.epilog }));
+  }
+
+  // META-INF/container.rdf: 구역 파일 목록
+  let rdfData = null;
+  const rdfEntry = b.entries.find((e) => e.name === 'META-INF/container.rdf');
+  if (rdfEntry && model.sections.length !== origSecCount) {
+    try {
+      const rdf = parseXml(utf8Decode(await rdfEntry.getData()));
+      const root = rdf.root;
+      const about = (el) => el.get('rdf:about', '');
+      const resOf = (el) => { const c = el.elements[0]; return c ? c.get('rdf:resource', '') : ''; };
+      const secPath = (i) => `Contents/section${i}.xml`;
+      const keep = new Set();
+      for (let i = 0; i < model.sections.length; i++) keep.add(secPath(i));
+      // 없어진 구역 항목 지우기
+      root.children = root.children.filter((el) => {
+        if (el.type !== 'el') return true;
+        const target = /^Contents\/section\d+\.xml$/.test(about(el)) ? about(el) : /^Contents\/section\d+\.xml$/.test(resOf(el)) ? resOf(el) : null;
+        return !target || keep.has(target);
+      });
+      const tmplPart = root.children.find((el) => el.type === 'el' && resOf(el) === secPath(0));
+      const tmplType = root.children.find((el) => el.type === 'el' && about(el) === secPath(0));
+      if (tmplPart && tmplType) {
+        for (let i = origSecCount; i < model.sections.length; i++) {
+          const a = tmplPart.clone();
+          a.elements[0].set('rdf:resource', secPath(i));
+          const t = tmplType.clone();
+          t.set('rdf:about', secPath(i));
+          let at = -1;
+          root.children.forEach((el, k) => { if (el.type === 'el' && about(el) === secPath(i - 1)) at = k; });
+          root.children.splice(at >= 0 ? at + 1 : root.children.length - 1, 0, a, t);
+        }
+      }
+      rdfData = utf8Encode(serializeXml(rdf));
+    } catch { rdfData = null; }
   }
 
   const out = [];
@@ -571,6 +615,7 @@ export async function writeHwpx(doc, model) {
     if (secNames.has(e.name)) { placeSections(); continue; }
     if (e.name === 'Contents/header.xml' && headerXml) { out.push({ name: e.name, data: utf8Encode(headerXml) }); continue; }
     if (e.name === 'Contents/content.hpf' && hpfData) { out.push({ name: e.name, data: hpfData }); continue; }
+    if (e.name === 'META-INF/container.rdf' && rdfData) { out.push({ name: e.name, data: rdfData }); continue; }
     if (e.name === 'Preview/PrvText.txt') { out.push({ name: e.name, data: utf8Encode(previewText(model)) }); continue; }
     out.push({ name: e.name, passthrough: e });
   }

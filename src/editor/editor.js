@@ -831,6 +831,11 @@ export class Editor {
     const offset = range.startOffset;
     const para = this.closestPara(container);
     if (!para) return false;
+    // 빈 문단(채움용 <br> 만 있는 문단)에서는 그 <br> 앞에 넣는다. 뒤에 넣으면 줄 바꿈으로 읽힌다.
+    if (!para.textContent.replace(/\u200b/g, '') && !para.querySelector('img, table, [data-cid]')) {
+      para.insertBefore(node, para.firstChild);
+      return true;
+    }
     if (container.nodeType === 3) {
       const span = container.parentElement;
       if (csOf(span) !== null && span !== para) {

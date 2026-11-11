@@ -51,14 +51,11 @@ export function paraShapeCss(ps) {
   const parts = [];
   const align = ps.align === 'distribute' ? 'justify' : ps.align;
   parts.push(`text-align:${align}`);
-  if (ps.align === 'distribute') parts.push('text-align-last:justify');
+  // 상속되는 속성은 값이 기본이어도 꼭 적는다 (표·글상자 속 문단이 바깥 문단의 값을 물려받지 않게).
+  parts.push(`text-align-last:${ps.align === 'distribute' ? 'justify' : 'auto'}`);
   let left = ps.marginLeft || 0;
-  if (ps.indent < 0) {
-    left += -ps.indent;
-    parts.push(`text-indent:${n2(ps.indent)}pt`);
-  } else if (ps.indent > 0) {
-    parts.push(`text-indent:${n2(ps.indent)}pt`);
-  }
+  if (ps.indent < 0) left += -ps.indent;
+  parts.push(`text-indent:${n2(ps.indent || 0)}pt`);
   parts.push(`margin:${n2(ps.spaceBefore || 0)}pt ${n2(ps.marginRight || 0)}pt ${n2(ps.spaceAfter || 0)}pt ${n2(left)}pt`);
   switch (ps.lineSpacingType) {
     case 'fixed': parts.push(`line-height:${n2(Math.max(1, ps.lineSpacing))}pt`); break;

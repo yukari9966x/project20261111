@@ -71,6 +71,8 @@ export async function runSmokeTest({ host, editor, outDir, cmdNew }) {
       }
       expect(tables === 1 && pics === 1, `${format} 표·그림 보존`);
       expect(bold && center, `${format} 진하게·가운데 정렬 보존`);
+      const last = doc.sections[0].paras[doc.sections[0].paras.length - 1];
+      expect(last.items.length === 1 && last.items[0].t === 'ctrl', `${format} 빈 문단에 넣은 그림 앞에 줄 바꿈이 끼지 않음`);
       expect(doc.bin.size === 1, `${format} 그림 데이터 보존`);
     }
     host.setDocumentState({ title: '자체 점검 완료', dirty: false });

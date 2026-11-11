@@ -203,3 +203,42 @@ test('잘못된 파일은 알기 쉬운 오류로 거부한다', async () => {
   const { bytes } = await saveDocument(doc, saveModelFromDoc(doc));
   await assert.rejects(() => openDocument(bytes.subarray(0, 700), 'cut.hwp'));
 });
+
+test('형식 변환: 구역이 여러 개인 HWP 를 HWPX 로 옮기면 꾸러미 정보(구역 수·목록)가 맞는다', async () => {
+  const doc = await newDocument('hwp');
+  const base = doc.sections[0].paras[0];
+  const mk = (t) => ({ src: null, own: true, deep: true, paraShapeId: base.paraShapeId, styleId: 0, pageBreak: false, cs0: base.cs0 ?? 0, items: [{ t: 'text', cs: base.cs0 ?? 0, text: t }] });
+  const page = doc.sections[0].page;
+  const model = { sections: [
+    { section: doc.sections[0], paras: [mk('첫째 구역')], page, pageDirty: false, clean: false },
+    { section: null, paras: [mk('둘째 구역')], page: { ...page, width: page.height, height: page.width, landscape: true }, pageDirty: true, clean: false },
+    { section: null, paras: [mk('셋째 구역')], page, pageDirty: true, clean: false },
+  ] };
+  const hwp = await openDocument((await saveDocument(doc, model)).bytes);
+  assert.equal(hwp.sections.length, 3);
+  assert.equal(hwp.sections[1].page.landscape, true);
+  assert.ok(hwp.sections[1].page.width > hwp.sections[1].page.height);
+  assert.deepEqual(hwp.sections.map((s) => s.paras.length), [1, 1, 1]);
+
+  const { bytes } = await saveDocument(hwp, saveModelFromDoc(hwp), 'hwpx');
+  const x = await openDocument(bytes);
+  assert.equal(x.sections.length, 3);
+  assert.equal(docPlainText(x).replace(/\r\n/g, '|'), '첫째 구역|둘째 구역|셋째 구역');
+  assert.equal(x.sections[1].page.landscape, true);
+  const entries = readZip(bytes);
+  const names = entries.map((e) => e.name);
+  for (const i of [0, 1, 2]) assert.ok(names.includes(`Contents/section${i}.xml`));
+  const read = async (n) => utf8Decode(await entries.find((e) => e.name === n).getData());
+  assert.match(await read('Contents/header.xml'), /secCnt="3"/);
+  const hpf = await read('Contents/content.hpf');
+  for (const i of [0, 1, 2]) {
+    assert.ok(hpf.includes(`href="Contents/section${i}.xml"`), `manifest 에 구역 ${i}`);
+    assert.ok(hpf.includes(`idref="section${i}"`), `spine 에 구역 ${i}`);
+  }
+  const rdf = await read('META-INF/container.rdf');
+  for (const i of [0, 1, 2]) assert.equal(rdf.split(`Contents/section${i}.xml`).length - 1, 2, `container.rdf 에 구역 ${i}`);
+  // 거꾸로 HWP 로 옮겨도 구역 3개
+  const back = await openDocument((await saveDocument(x, saveModelFromDoc(x), 'hwp')).bytes);
+  assert.equal(back.sections.length, 3);
+  assert.equal(back.backing.cfb.entries.filter((e) => /^BodyText\/Section\d+$/.test(e.path)).length, 3);
+});
