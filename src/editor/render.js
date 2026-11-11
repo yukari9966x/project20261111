@@ -119,21 +119,22 @@ export class Renderer {
     const colW = cols > 1 ? (contentW - (sec.columns.gap || 0) * (cols - 1)) / cols : contentW;
     const style = `width:${n2(pg.width)}pt;min-height:${n2(pg.height)}pt;padding:${n2(pg.marginTop)}pt ${n2(pg.marginRight)}pt ${n2(pg.marginBottom)}pt ${n2(pg.marginLeft + (pg.gutter || 0))}pt`;
     let html = `<div class="sec" data-sec="${index}" style="${style}">`;
-    html += `<div class="hfa hfa-top" style="min-height:${n2(pg.marginHeader)}pt">${this.headers.map((h) => this.renderHf(h)).join('')}</div>`;
+    // 머리말/꼬리말/주석 영역은 본문과 분리된 편집 영역으로 둔다 (본문 캐럿이 흘러들지 않게).
+    html += `<div class="hfa hfa-top" contenteditable="false" style="min-height:${n2(pg.marginHeader)}pt">${this.headers.map((h) => this.renderHf(h)).join('')}</div>`;
     html += `<div class="body plist"${cols > 1 ? ` style="max-width:${n2(colW)}pt"` : ''}>${body}</div>`;
-    html += `<div class="notes"${this.notes.length ? '' : ' hidden'}>${this.notes.map((n) => this.renderNote(n)).join('')}</div>`;
-    html += `<div class="hfa hfa-bottom" style="min-height:${n2(pg.marginFooter)}pt">${this.footers.map((h) => this.renderHf(h)).join('')}</div>`;
+    html += `<div class="notes" contenteditable="false"${this.notes.length ? '' : ' hidden'}>${this.notes.map((n) => this.renderNote(n)).join('')}</div>`;
+    html += `<div class="hfa hfa-bottom" contenteditable="false" style="min-height:${n2(pg.marginFooter)}pt">${this.footers.map((h) => this.renderHf(h)).join('')}</div>`;
     html += '</div>';
     return html;
   }
 
   renderHf(ctrl) {
     const label = (ctrl.hfKind === 'header' ? '머리말' : '꼬리말') + (ctrl.applyTo === 'even' ? ' (짝수 쪽)' : ctrl.applyTo === 'odd' ? ' (홀수 쪽)' : '');
-    return `<div class="hf plist" data-cid="${ctrl.cid}" data-label="${escAttr(label)}">${this.renderParas(ctrl.paras || [], ctrl)}</div>`;
+    return `<div class="hf plist" contenteditable="true" data-cid="${ctrl.cid}" data-label="${escAttr(label)}">${this.renderParas(ctrl.paras || [], ctrl)}</div>`;
   }
 
   renderNote(ctrl) {
-    return `<div class="note plist" data-cid="${ctrl.cid}">${this.renderParas(ctrl.paras || [], ctrl)}</div>`;
+    return `<div class="note plist" contenteditable="true" data-cid="${ctrl.cid}">${this.renderParas(ctrl.paras || [], ctrl)}</div>`;
   }
 
   renderParas(paras, owner) {

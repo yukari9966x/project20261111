@@ -126,6 +126,120 @@ export class Editor {
     const r = sel.getRangeAt(0);
     return this.root.contains(r.commonAncestorContainer) ? r : null;
   }
+
+  /**
+   * 문단 밖(구역 여백, 구역 사이 등)에 놓인 위치를 가장 가까운 문단 안의 위치로 바꾼다.
+   * 이미 문단 안이면 null. isEnd 는 범위의 끝점인지 여부.
+   */
+  snap(node, offset, isEnd) {
+    if (this.closestPara(node)) return null;
+    const el = this.closestEl(node);
+    if (!el || !this.root.contains(el)) return null;
+    const startOf = (p) => [p, 0];
+    const endOf = (p) => [p, p.childNodes.length];
+    const pick = (plist, toEnd) => {
+      const ps = plist.querySelectorAll(':scope > .para');
+      if (!ps.length) return null;
+      return toEnd ? endOf(ps[ps.length - 1]) : startOf(ps[0]);
+    };
+    const plist = el.closest('.plist');
+    if (plist) {
+      if (node === plist) {
+        const kids = Array.from(plist.childNodes);
+        if (!isEnd) { for (let i = offset; i < kids.length; i++) if (kids[i].nodeType === 1 && kids[i].classList.contains('para')) return startOf(kids[i]); return pick(plist, true); }
+        for (let i = Math.min(offset, kids.length) - 1; i >= 0; i--) if (kids[i].nodeType === 1 && kids[i].classList.contains('para')) return endOf(kids[i]);
+        return pick(plist, false);
+      }
+      return pick(plist, isEnd);
+    }
+    let sec = el.closest('.sec');
+    let toEnd = isEnd;
+    if (!sec) {
+      const secs = Array.from(this.root.querySelectorAll(':scope > .sec'));
+      if (!secs.length) return null;
+      if (node === this.root) {
+        if (isEnd) { sec = secs[Math.max(0, Math.min(offset, secs.length) - 1)]; toEnd = offset > 0; }
+        else { sec = secs[Math.min(offset, secs.length - 1)]; toEnd = offset >= secs.length; }
+      } else sec = isEnd ? secs[secs.length - 1] : secs[0];
+    } else if (node === sec) {
+      const body = sec.querySelector(':scope > .body');
+      toEnd = offset > Array.prototype.indexOf.call(sec.childNodes, body);
+    } else toEnd = !!el.closest('.notes, .hfa-bottom');
+    const body = sec.querySelector(':scope > .body');
+    return body ? pick(body, toEnd) : null;
+  }
+
+  /**
+   * 문단 밖으로 나간 캐럿이 갈 자리. 머리말/꼬리말/주석 안에서 움직이다가 밖으로 튕겨 나온
+   * 캐럿은 그 영역 안(나간 방향의 끝)에 붙잡아 둔다.
+   */
+  snapCaret(node, offset) {
+    const p = this.snap(node, offset, false);
+    if (!p) return null;
+    const island = this.lastIsland;
+    if (island && island.isConnected && this.root.contains(island)) {
+      const ps = island.querySelectorAll(':scope > .para');
+      if (ps.length) {
+        let after = false;
+        try { const isl = document.createRange(); isl.selectNode(island); after = isl.comparePoint(node, offset) > 0; } catch { after = false; }
+        const last = ps[ps.length - 1];
+        return after ? [last, last.childNodes.length] : [ps[0], 0];
+      }
+    }
+    return p;
+  }
+
+  /** 끝점이 문단 밖에 있는 범위를 문단 안으로 맞춘 새 범위를 돌려준다 (바꿀 것이 없으면 원래 범위). */
+  clampRange(range) {
+    if (!range) return null;
+    const a = range.collapsed ? this.snapCaret(range.startContainer, range.startOffset) : this.snap(range.startContainer, range.startOffset, false);
+    const b = range.collapsed ? null : this.snap(range.endContainer, range.endOffset, true);
+    if (!a && !b) return range;
+    const nr = document.createRange();
+    try {
+      if (a) nr.setStart(a[0], a[1]); else nr.setStart(range.startContainer, range.startOffset);
+      if (range.collapsed) nr.collapse(true);
+      else if (b) nr.setEnd(b[0], b[1]);
+      else nr.setEnd(range.endContainer, range.endOffset);
+    } catch { return range; }
+    return nr;
+  }
+
+  /** 명령을 실행할 범위: 현재 선택을 문단 안으로 맞춰서 돌려준다. */
+  commandRange() {
+    const r = this.getRange();
+    if (!r) return null;
+    const nr = this.clampRange(r);
+    if (nr !== r) this.setRange(nr);
+    return nr;
+  }
+
+  /** 구역/문서 바로 아래에 잘못 들어간 내용을 본문 문단으로 옮긴다. */
+  sweepStrays() {
+    let changed = false;
+    const secs = Array.from(this.root.querySelectorAll(':scope > .sec'));
+    const lastBody = secs.length ? secs[secs.length - 1].querySelector(':scope > .body') : null;
+    const adopt = (node, body) => {
+      if (!body) { node.remove(); return; }
+      if (node.nodeType === 3 && !node.nodeValue.replace(/\u200b/g, '').trim()) { node.remove(); return; }
+      body.appendChild(node);
+      changed = true;
+    };
+    for (const n of Array.from(this.root.childNodes)) {
+      if (n.nodeType === 1 && n.classList.contains('sec')) continue;
+      adopt(n, lastBody);
+    }
+    for (const sec of secs) {
+      const body = sec.querySelector(':scope > .body');
+      for (const n of Array.from(sec.childNodes)) {
+        if (n.nodeType === 1 && (n.classList.contains('body') || n.classList.contains('hfa') || n.classList.contains('notes'))) continue;
+        adopt(n, body);
+      }
+      if (changed && body) this.normalizePlist(body);
+    }
+    return changed;
+  }
+
   setRange(r) {
     const sel = document.getSelection();
     sel.removeAllRanges();
@@ -250,6 +364,8 @@ export class Editor {
     root.addEventListener('dragstart', (e) => e.preventDefault());
     root.addEventListener('drop', (e) => e.preventDefault());
     root.addEventListener('mousedown', (e) => {
+      // 어느 편집 영역(본문 / 머리말·꼬리말·주석)을 눌렀는지 바로 기억해 둔다.
+      this.lastIsland = e.target instanceof Element ? e.target.closest('.hf, .note') : null;
       for (const el of root.querySelectorAll('img.pic.sel')) el.classList.remove('sel');
       if (e.target instanceof HTMLImageElement && e.target.classList.contains('pic')) {
         e.target.classList.add('sel');
@@ -262,8 +378,20 @@ export class Editor {
       this.history.breakRun();
     });
     document.addEventListener('selectionchange', () => {
-      const r = this.getRange();
-      if (r) { this.lastRange = r.cloneRange(); this.onSelection(); }
+      let r = this.getRange();
+      if (!r) return;
+      if (r.collapsed && !this.composing) {
+        const p = this.snapCaret(r.startContainer, r.startOffset);
+        if (p) {
+          this.setCaret(p[0], p[1]);
+          r = this.getRange();
+          if (!r) return;
+        }
+      }
+      const host = this.closestEl(r.startContainer);
+      this.lastIsland = host ? host.closest('.hf, .note') : null;
+      this.lastRange = r.cloneRange();
+      this.onSelection();
     });
   }
 
@@ -280,7 +408,7 @@ export class Editor {
       return;
     }
     if (t === 'insertFromDrop' || t === 'deleteByDrag' || t === 'insertFromPaste' || t === 'insertFromYank') { e.preventDefault(); return; }
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     if (!range.collapsed) {
       if (this.closestPlist(range.startContainer) !== this.closestPlist(range.endContainer)) {
@@ -327,6 +455,7 @@ export class Editor {
   }
 
   afterEdit(kind) {
+    if (this.root.querySelector(':scope > :not(.sec)') || Array.from(this.root.querySelectorAll(':scope > .sec')).some((sec) => sec.childNodes.length !== 4)) this.sweepStrays();
     this.normalizeAtCaret();
     this.history.record(kind);
     this.onChange();
@@ -626,7 +755,7 @@ export class Editor {
   }
 
   applyCharFormat(changes) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     if (range.collapsed) { this.setPendingFormat(changes); this.onSelection(); return; }
     const nodes = this.textNodesInRange(range);
@@ -695,7 +824,7 @@ export class Editor {
 
   /** 캐럿 위치에 인라인 노드를 넣는다 (글자 모양 span 을 쪼갠다). */
   insertInlineAtCaret(node) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return false;
     if (!range.collapsed) { document.execCommand('delete'); return this.insertInlineAtCaret(node); }
     let container = range.startContainer;
@@ -744,7 +873,7 @@ export class Editor {
   // ------------------------------------------------------------------ 문단 서식
 
   applyParaFormat(changes) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     for (const para of this.parasInRange(range)) {
       const ps = psOf(para) ?? 0;
@@ -757,7 +886,7 @@ export class Editor {
   }
 
   insertPageBreak() {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     const plist = this.closestPlist(range.startContainer);
     if (!plist || !plist.classList.contains('body')) { this.notify('쪽 나누기는 본문에서만 넣을 수 있습니다.'); return; }
@@ -955,7 +1084,7 @@ export class Editor {
   }
 
   insertTable(rows, cols) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     if (!range.collapsed) { range.collapse(false); this.setRange(range); }
     const para = this.closestPara(range.startContainer);
@@ -1018,7 +1147,7 @@ export class Editor {
   insertImage(bytes, name = '') {
     const info = sniffImage(bytes);
     if (!info || !/^(png|jpg|gif|bmp)$/.test(info.ext)) { this.notify('지원하지 않는 그림 형식입니다. (PNG, JPG, GIF, BMP 만 가능)', true); return false; }
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return false;
     const para = this.closestPara(range.startContainer);
     if (!para) return false;
@@ -1065,7 +1194,7 @@ export class Editor {
   }
 
   onCopy(e, cut) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range || range.collapsed) return;
     e.preventDefault();
     const frag = range.cloneContents();
@@ -1093,7 +1222,7 @@ export class Editor {
     e.preventDefault();
     const cd = e.clipboardData;
     if (!cd) return;
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return;
     if (!range.collapsed) {
       if (this.closestPlist(range.startContainer) !== this.closestPlist(range.endContainer)) this.deleteAcross(range);
@@ -1133,7 +1262,7 @@ export class Editor {
 
   /** 이 편집기에서 복사한 조각을 붙여 넣는다. */
   pasteFragment(wrap, inline) {
-    const range = this.getRange();
+    const range = this.commandRange();
     if (!range) return false;
     const para = this.closestPara(range.startContainer);
     if (!para) return false;
