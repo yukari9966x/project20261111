@@ -411,6 +411,11 @@ export class Editor {
     const range = this.commandRange();
     if (!range) return;
     if (!range.collapsed) {
+      if (e.cancelable && /^(delete|insert)/.test(t) && this.unbalancedFields(range)) {
+        e.preventDefault();
+        this.notify('필드(누름틀·하이퍼링크 등)의 시작이나 끝만 걸친 선택은 지울 수 없습니다. 필드 전체를 포함하거나 필드 안쪽만 선택해 주세요.', true);
+        return;
+      }
       if (this.closestPlist(range.startContainer) !== this.closestPlist(range.endContainer)) {
         if (!e.cancelable) return;
         e.preventDefault();
@@ -421,8 +426,83 @@ export class Editor {
       }
       return;
     }
-    if (/^delete.*Backward$/.test(t) && this.atPlistEdge(range, true)) { e.preventDefault(); return; }
-    if (/^delete.*Forward$/.test(t) && this.atPlistEdge(range, false)) { e.preventDefault(); }
+    if (/^delete.*Backward$/.test(t)) {
+      this.skipAnchors(true);
+      const r = this.getRange();
+      if (r && this.atPlistEdge(r, true)) e.preventDefault();
+    } else if (/^delete.*Forward$/.test(t)) {
+      this.skipAnchors(false);
+      const r = this.getRange();
+      if (r && this.atPlistEdge(r, false)) e.preventDefault();
+    }
+  }
+
+  /**
+   * 캐럿 바로 앞(backward) 또는 뒤에 보이지 않는 조판 부호(책갈피, 필드 시작/끝, 머리말 연결 등)가 있으면
+   * 캐럿을 그 너머로 옮긴다. 지우기 글쇠 한 번에 보이지 않는 부호가 지워지는 일을 막는다.
+   */
+  skipAnchors(backward) {
+    const range = this.getRange();
+    if (!range || !range.collapsed) return;
+    const para = this.closestPara(range.startContainer);
+    if (!para) return;
+    const blank = (n) => n.nodeType === 3 && !n.nodeValue.replace(/\u200b/g, '');
+    const isAnchor = (n) => n.nodeType === 1 && n.classList.contains('anc');
+    let node = range.startContainer;
+    let offset = range.startOffset;
+    let moved = false;
+    for (let guard = 0; guard < 200; guard++) {
+      let next = null;
+      if (node.nodeType === 3) {
+        const len = node.nodeValue.length;
+        const rest = backward ? node.nodeValue.slice(0, offset) : node.nodeValue.slice(offset);
+        if (rest.replace(/\u200b/g, '')) break; // 지울 글자가 있다
+        void len;
+      } else {
+        const child = backward ? node.childNodes[offset - 1] : node.childNodes[offset];
+        if (child) next = child;
+      }
+      if (!next) {
+        // 형제가 없으면 부모로 올라가며 찾는다 (문단을 벗어나지 않는다).
+        let cur = node;
+        while (cur && cur !== para) {
+          const sib = backward ? cur.previousSibling : cur.nextSibling;
+          if (sib) { next = sib; break; }
+          cur = cur.parentNode;
+        }
+      }
+      if (!next) break;
+      // 가장 가까운 잎 노드까지 내려간다.
+      while (next.nodeType === 1 && !isAnchor(next) && next.tagName === 'SPAN' && !next.hasAttribute('contenteditable') && next.childNodes.length) {
+        next = backward ? next.lastChild : next.firstChild;
+      }
+      if (isAnchor(next)) {
+        node = next.parentNode;
+        offset = Array.prototype.indexOf.call(node.childNodes, next) + (backward ? 0 : 1);
+        moved = true;
+        continue;
+      }
+      if (blank(next)) { node = next; offset = backward ? 0 : next.nodeValue.length; continue; }
+      if (next.nodeType === 3) { node = next; offset = backward ? next.nodeValue.length : 0; }
+      else if (next.nodeType === 1 && next.tagName === 'SPAN' && !next.hasAttribute('contenteditable') && !next.childNodes.length) { node = next.parentNode; offset = Array.prototype.indexOf.call(node.childNodes, next) + (backward ? 0 : 1); continue; }
+      break;
+    }
+    if (moved) this.setCaret(node, offset);
+  }
+
+  /** 선택 범위 안의 필드 시작/끝 부호 개수가 맞지 않으면 true (필드의 한쪽만 지우면 문서가 어그러진다). */
+  unbalancedFields(range) {
+    const ca = this.closestEl(range.commonAncestorContainer);
+    if (!ca) return false;
+    let begins = 0, ends = 0;
+    for (const el of ca.querySelectorAll('.anc[data-cid]')) {
+      if (!range.intersectsNode(el)) continue;
+      const c = this.reg.ctrls.get(Number(el.dataset.cid));
+      if (!c) continue;
+      if (c.kind === 'fieldBegin') begins++;
+      else if (c.kind === 'fieldEnd') ends++;
+    }
+    return begins !== ends;
   }
 
   /** 캐럿이 문단 목록의 맨 처음(backward) 또는 맨 끝에 있는가 */
@@ -1217,6 +1297,7 @@ export class Editor {
     e.clipboardData.setData('text/html', `<div data-marohwp="${this.session}" data-inline="${inline ? 1 : 0}">${html}</div>`);
     e.clipboardData.setData('text/plain', this.selectionPlainText());
     if (cut) {
+      if (this.unbalancedFields(range)) { this.notify('필드의 시작이나 끝만 걸친 선택은 오려 둘 수 없습니다.', true); return; }
       if (this.closestPlist(range.startContainer) !== this.closestPlist(range.endContainer)) this.deleteAcross(range);
       else document.execCommand('delete');
       this.afterEdit('cmd');
@@ -1230,6 +1311,7 @@ export class Editor {
     const range = this.commandRange();
     if (!range) return;
     if (!range.collapsed) {
+      if (this.unbalancedFields(range)) { this.notify('필드의 시작이나 끝만 걸친 선택에는 붙여 넣을 수 없습니다.', true); return; }
       if (this.closestPlist(range.startContainer) !== this.closestPlist(range.endContainer)) this.deleteAcross(range);
       else document.execCommand('delete');
     }
