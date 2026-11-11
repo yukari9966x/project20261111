@@ -1,0 +1,76 @@
+{
+  "name": "marohwp",
+  "productName": "marohwp",
+  "version": "1.0.0",
+  "description": "HWP/HWPX 문서를 열고 편집하는 워드프로세서",
+  "author": "marohwp",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node scripts/run-tests.mjs",
+    "icon": "python3 scripts/make_icon.py",
+    "pack": "electron-builder --win --x64 --dir --publish never",
+    "dist": "electron-builder --win --x64 --publish never",
+    "dist:nowine": "node scripts/build-win-nowine.cjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "45.3.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.marohwp.app",
+    "productName": "marohwp",
+    "copyright": "Copyright © 2026 marohwp",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "src/**",
+      "package.json",
+      "build/icon.ico",
+      "build/icon-256.png"
+    ],
+    "electronLanguages": [
+      "ko",
+      "en-US"
+    ],
+    "publish": null,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "executableName": "marohwp"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "marohwp-Setup-${version}.${ext}",
+      "shortcutName": "marohwp",
+      "uninstallDisplayName": "marohwp",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerLanguages": [
+        "ko_KR"
+      ],
+      "language": "1042",
+      "include": "build/installer.nsh"
+    }
+  }
+}

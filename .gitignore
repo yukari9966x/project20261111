@@ -1,0 +1,23 @@
+# 의존성
+node_modules/
+
+# 빌드 결과물 (설치 파일은 GitHub Actions 가 만든다)
+dist/
+
+# 로그 / 임시 파일
+*.log
+npm-debug.log*
+*.tmp
+.~*
+
+# OS / 편집기
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Python (scripts/make_icon.py)
+__pycache__/
+*.pyc
